@@ -136,6 +136,7 @@
             <select id="provider-select">
               <option value="claude">Built-in Claude (works only inside Claude previews)</option>
               <option value="gemini">Google Gemini — your free API key</option>
+              <option value="groq">Groq — your free API key (fast, no card)</option>
             </select>
           </div>
           <div id="gemini-key-row" class="settings-row" style="display:none;">
@@ -144,6 +145,13 @@
           </div>
           <p class="settings-hint" id="gemini-hint" style="display:none;">
             Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>. It stays only in this browser tab's memory — never saved to disk, never sent anywhere but Google.
+          </p>
+          <div id="groq-key-row" class="settings-row" style="display:none;">
+            <span>Groq key</span>
+            <input type="password" id="groq-key" placeholder="Paste your key">
+          </div>
+          <p class="settings-hint" id="groq-hint" style="display:none;">
+            Get a free key at <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a> — no card required. Same privacy: kept only in this tab's memory.
           </p>
         </div>
       </div>
@@ -226,6 +234,7 @@
   let activeTables = {};
   let provider = 'claude';
   let geminiKey = '';
+  let groqKey = '';
 
   // ---------- Table helpers ----------
   function inferType(v){
@@ -437,6 +446,35 @@
     return parsed;
   }
 
+  async function callGroqModel(schema, question, apiKey){
+    if(!apiKey) throw new Error('Paste your free Groq API key in ⚙ AI provider first.');
+    let response;
+    try{
+      response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method:'POST',
+        headers:{'Content-Type':'application/json', 'Authorization':'Bearer ' + apiKey},
+        body: JSON.stringify({
+          model:'llama-3.3-70b-versatile',
+          messages:[
+            { role:'system', content: NL2SQL_INSTRUCTIONS },
+            { role:'user', content: 'Schema:\n' + schema + '\n\nQuestion: ' + question }
+          ],
+          response_format: { type:'json_object' }
+        })
+      });
+    }catch(e){
+      throw new Error('Could not reach the Groq API — check your internet connection.');
+    }
+    const data = await response.json();
+    if(data.error) throw new Error('Groq error: ' + (data.error.message || 'request failed — check your API key.'));
+    const text = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+    let parsed;
+    try{ parsed = extractJson(text); }
+    catch(e){ throw new Error('Could not parse a SQL query from the Groq response.'); }
+    if(!parsed.sql) throw new Error('No SQL was returned.');
+    return parsed;
+  }
+
   // ---------- Core: ask the model ----------
   async function askQuestion(){
     const question = document.getElementById('question').value.trim();
@@ -451,8 +489,8 @@
 
     const schema = schemaDescription();
     try{
-      const parsed = provider==='gemini'
-        ? await callGeminiModel(schema, question, geminiKey)
+      const parsed = provider==='gemini' ? await callGeminiModel(schema, question, geminiKey)
+        : provider==='groq' ? await callGroqModel(schema, question, groqKey)
         : await callClaudeModel(schema, question);
 
       if(!isSafeSelect(parsed.sql)){
@@ -546,12 +584,15 @@
   });
   document.getElementById('provider-select').addEventListener('change', (e)=>{
     provider = e.target.value;
-    const isGemini = provider==='gemini';
-    document.getElementById('gemini-key-row').style.display = isGemini ? 'flex' : 'none';
-    document.getElementById('gemini-hint').style.display = isGemini ? 'block' : 'none';
-    document.getElementById('provider-label').textContent = isGemini ? 'Google Gemini' : 'Built-in (Claude preview)';
+    document.getElementById('gemini-key-row').style.display = provider==='gemini' ? 'flex' : 'none';
+    document.getElementById('gemini-hint').style.display = provider==='gemini' ? 'block' : 'none';
+    document.getElementById('groq-key-row').style.display = provider==='groq' ? 'flex' : 'none';
+    document.getElementById('groq-hint').style.display = provider==='groq' ? 'block' : 'none';
+    const labels = { claude:'Built-in (Claude preview)', gemini:'Google Gemini', groq:'Groq' };
+    document.getElementById('provider-label').textContent = labels[provider];
   });
   document.getElementById('gemini-key').addEventListener('input', (e)=>{ geminiKey = e.target.value.trim(); });
+  document.getElementById('groq-key').addEventListener('input', (e)=>{ groqKey = e.target.value.trim(); });
 
   document.getElementById('run-btn').addEventListener('click', askQuestion);
   document.getElementById('question').addEventListener('keydown', (e)=>{
